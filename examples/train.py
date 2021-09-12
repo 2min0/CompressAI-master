@@ -118,37 +118,35 @@ def train_one_epoch(
     model.train()
     device = next(model.parameters()).device
 
-    for i, d in enumerate(train_dataloader_raw):
-        for i_srgb, d_srgb in enumerate(train_dataloader_srgb):
-            if i == i_srgb:
-                d = d.to(device)
-                d_srgb = d_srgb.to(device)
+    for i, d in enumerate(zip(train_dataloader_raw, train_dataloader_srgb)):
+        d_raw = d[0].to(device)
+        d_srgb = d[1].to(device)
 
-                optimizer.zero_grad()
-                aux_optimizer.zero_grad()
+        optimizer.zero_grad()
+        aux_optimizer.zero_grad()
 
-                out_net = model(d)
+        out_net = model(d_raw)
 
-                out_criterion = criterion(out_net, d_srgb)
-                out_criterion["loss"].backward()
-                if clip_max_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max_norm)
-                optimizer.step()
+        out_criterion = criterion(out_net, d_srgb)
+        out_criterion["loss"].backward()
+        if clip_max_norm > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max_norm)
+        optimizer.step()
 
-                aux_loss = model.aux_loss()
-                aux_loss.backward()
-                aux_optimizer.step()
+        aux_loss = model.aux_loss()
+        aux_loss.backward()
+        aux_optimizer.step()
 
-                if i % 10 == 0:
-                    print(
-                        f"Train epoch {epoch}: ["
-                        f"{i*len(d)}/{len(train_dataloader_raw.dataset)}"
-                        f" ({100. * i / len(train_dataloader_raw):.0f}%)]"
-                        f'\tLoss: {out_criterion["loss"].item():.3f} |'
-                        f'\tMSE loss: {out_criterion["mse_loss"].item():.3f} |'
-                        f'\tBpp loss: {out_criterion["bpp_loss"].item():.2f} |'
-                        f"\tAux loss: {aux_loss.item():.2f}"
-                    )
+        if i % 10 == 0:
+            print(
+                f"Train epoch {epoch}: ["
+                f"{i*len(d)}/{len(train_dataloader_raw.dataset)}"
+                f" ({100. * i / len(train_dataloader_raw):.0f}%)]"
+                f'\tLoss: {out_criterion["loss"].item():.3f} |'
+                f'\tMSE loss: {out_criterion["mse_loss"].item():.3f} |'
+                f'\tBpp loss: {out_criterion["bpp_loss"].item():.2f} |'
+                f"\tAux loss: {aux_loss.item():.2f}"
+            )
 
 
 def test_epoch(epoch, test_dataloader_raw, test_dataloader_srgb, model, criterion):
@@ -161,19 +159,17 @@ def test_epoch(epoch, test_dataloader_raw, test_dataloader_srgb, model, criterio
     aux_loss = AverageMeter()
 
     with torch.no_grad():
-        for i, d in test_dataloader_raw:
-            for i_srgb, d_srgb in test_dataloader_srgb:
-                if i == i_srgb:
-                    d = d.to(device)
-                    d_srgb = d_srgb.to(device)
+        for d in zip(test_dataloader_raw, test_dataloader_srgb):
+            d_raw = d[0].to(device)
+            d_srgb = d[1].to(device)
 
-                    out_net = model(d)
-                    out_criterion = criterion(out_net, d_srgb)
+            out_net = model(d_raw)
+            out_criterion = criterion(out_net, d_srgb)
 
-                    aux_loss.update(model.aux_loss())
-                    bpp_loss.update(out_criterion["bpp_loss"])
-                    loss.update(out_criterion["loss"])
-                    mse_loss.update(out_criterion["mse_loss"])
+            aux_loss.update(model.aux_loss())
+            bpp_loss.update(out_criterion["bpp_loss"])
+            loss.update(out_criterion["loss"])
+            mse_loss.update(out_criterion["mse_loss"])
 
     print(
         f"Test epoch {epoch}: Average losses:"
