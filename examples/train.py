@@ -113,42 +113,45 @@ def configure_optimizers(net, args):
 
 
 def train_one_epoch(
-    model, criterion, train_dataloader, optimizer, aux_optimizer, epoch, clip_max_norm
+    model, criterion, train_dataloader_raw, train_dataloader_srgb, optimizer, aux_optimizer, epoch, clip_max_norm
 ):
     model.train()
     device = next(model.parameters()).device
 
-    for i, d in enumerate(train_dataloader):
-        d = d.to(device)
+    for i, d in enumerate(train_dataloader_raw):
+        for i_srgb, d_srgb in enumerate(train_dataloader_srgb):
+            if i == i_srgb:
+                d = d.to(device)
+                d_srgb = d_srgb.to(device)
 
-        optimizer.zero_grad()
-        aux_optimizer.zero_grad()
+                optimizer.zero_grad()
+                aux_optimizer.zero_grad()
 
-        out_net = model(d)
+                out_net = model(d)
 
-        out_criterion = criterion(out_net, d)
-        out_criterion["loss"].backward()
-        if clip_max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max_norm)
-        optimizer.step()
+                out_criterion = criterion(out_net, d_srgb)
+                out_criterion["loss"].backward()
+                if clip_max_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max_norm)
+                optimizer.step()
 
-        aux_loss = model.aux_loss()
-        aux_loss.backward()
-        aux_optimizer.step()
+                aux_loss = model.aux_loss()
+                aux_loss.backward()
+                aux_optimizer.step()
 
-        if i % 10 == 0:
-            print(
-                f"Train epoch {epoch}: ["
-                f"{i*len(d)}/{len(train_dataloader.dataset)}"
-                f" ({100. * i / len(train_dataloader):.0f}%)]"
-                f'\tLoss: {out_criterion["loss"].item():.3f} |'
-                f'\tMSE loss: {out_criterion["mse_loss"].item():.3f} |'
-                f'\tBpp loss: {out_criterion["bpp_loss"].item():.2f} |'
-                f"\tAux loss: {aux_loss.item():.2f}"
-            )
+                if i % 10 == 0:
+                    print(
+                        f"Train epoch {epoch}: ["
+                        f"{i*len(d)}/{len(train_dataloader_raw.dataset)}"
+                        f" ({100. * i / len(train_dataloader_raw):.0f}%)]"
+                        f'\tLoss: {out_criterion["loss"].item():.3f} |'
+                        f'\tMSE loss: {out_criterion["mse_loss"].item():.3f} |'
+                        f'\tBpp loss: {out_criterion["bpp_loss"].item():.2f} |'
+                        f"\tAux loss: {aux_loss.item():.2f}"
+                    )
 
 
-def test_epoch(epoch, test_dataloader, model, criterion):
+def test_epoch(epoch, test_dataloader_raw, test_dataloader_srgb, model, criterion):
     model.eval()
     device = next(model.parameters()).device
 
@@ -158,15 +161,19 @@ def test_epoch(epoch, test_dataloader, model, criterion):
     aux_loss = AverageMeter()
 
     with torch.no_grad():
-        for d in test_dataloader:
-            d = d.to(device)
-            out_net = model(d)
-            out_criterion = criterion(out_net, d)
+        for i, d in test_dataloader_raw:
+            for i_srgb, d_srgb in test_dataloader_srgb:
+                if i == i_srgb:
+                    d = d.to(device)
+                    d_srgb = d_srgb.to(device)
 
-            aux_loss.update(model.aux_loss())
-            bpp_loss.update(out_criterion["bpp_loss"])
-            loss.update(out_criterion["loss"])
-            mse_loss.update(out_criterion["mse_loss"])
+                    out_net = model(d)
+                    out_criterion = criterion(out_net, d_srgb)
+
+                    aux_loss.update(model.aux_loss())
+                    bpp_loss.update(out_criterion["bpp_loss"])
+                    loss.update(out_criterion["loss"])
+                    mse_loss.update(out_criterion["mse_loss"])
 
     print(
         f"Test epoch {epoch}: Average losses:"
@@ -195,7 +202,10 @@ def parse_args(argv):
         help="Model architecture (default: %(default)s)",
     )
     parser.add_argument(
-        "-d", "--dataset", type=str, required=True, help="Training dataset"
+        "-d_raw", "--dataset_raw", type=str, required=True, help="Training raw dataset"
+    )
+    parser.add_argument(
+        "-d_srgb", "--dataset_srgb", type=str, required=True, help="Training sRGB dataset"
     )
     parser.add_argument(
         "-e",
@@ -243,7 +253,7 @@ def parse_args(argv):
         "--patch-size",
         type=int,
         nargs=2,
-        default=(256, 256),
+        default=(128, 128),
         help="Size of the patches to be cropped (default: %(default)s)",
     )
     parser.add_argument("--cuda", action="store_true", help="Use cuda")
@@ -279,21 +289,40 @@ def main(argv):
         [transforms.CenterCrop(args.patch_size), transforms.ToTensor()]
     )
 
-    train_dataset = ImageFolder(args.dataset, split="train", transform=train_transforms)
-    test_dataset = ImageFolder(args.dataset, split="test", transform=test_transforms)
+    train_dataset_raw = ImageFolder(args.dataset_raw, split="train", transform=train_transforms)
+    train_dataset_srgb = ImageFolder(args.dataset_srgb, split="train", transform=train_transforms)
+
+    test_dataset_raw = ImageFolder(args.dataset_raw, split="test", transform=test_transforms)
+    test_dataset_srgb = ImageFolder(args.dataset_srgb, split="test", transform=test_transforms)
 
     device = "cuda" if args.cuda and torch.cuda.is_available() else "cpu"
 
-    train_dataloader = DataLoader(
-        train_dataset,
+    train_dataloader_raw = DataLoader(
+        train_dataset_raw,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        shuffle=True,
+        shuffle=False,
         pin_memory=(device == "cuda"),
     )
 
-    test_dataloader = DataLoader(
-        test_dataset,
+    train_dataloader_srgb = DataLoader(
+        train_dataset_srgb,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        shuffle=False,
+        pin_memory=(device == "cuda"),
+    )
+
+    test_dataloader_raw = DataLoader(
+        test_dataset_raw,
+        batch_size=args.test_batch_size,
+        num_workers=args.num_workers,
+        shuffle=False,
+        pin_memory=(device == "cuda"),
+    )
+
+    test_dataloader_srgb = DataLoader(
+        test_dataset_srgb,
         batch_size=args.test_batch_size,
         num_workers=args.num_workers,
         shuffle=False,
@@ -326,13 +355,14 @@ def main(argv):
         train_one_epoch(
             net,
             criterion,
-            train_dataloader,
+            train_dataloader_raw,
+            train_dataloader_srgb,
             optimizer,
             aux_optimizer,
             epoch,
             args.clip_max_norm,
         )
-        loss = test_epoch(epoch, test_dataloader, net, criterion)
+        loss = test_epoch(epoch, test_dataloader_raw, test_dataloader_srgb, net, criterion)
         lr_scheduler.step(loss)
 
         is_best = loss < best_loss
