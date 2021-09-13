@@ -27,6 +27,8 @@ from torchvision import transforms
 
 from compressai.datasets import ImageFolder
 from compressai.zoo import models
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 class RateDistortionLoss(nn.Module):
@@ -113,14 +115,14 @@ def configure_optimizers(net, args):
 
 
 def train_one_epoch(
-    model, criterion, train_dataloader_raw, train_dataloader_srgb, optimizer, aux_optimizer, epoch, clip_max_norm
+    model, criterion, train_dataloader, optimizer, aux_optimizer, epoch, clip_max_norm
 ):
     model.train()
     device = next(model.parameters()).device
 
-    for i, d in enumerate(zip(train_dataloader_raw, train_dataloader_srgb)):
-        d_raw = d[0].to(device)
-        d_srgb = d[1].to(device)
+    for i, d in enumerate(train_dataloader):
+        d_raw = d['raw'].to(device)
+        d_srgb = d['srgb'].to(device)
 
         optimizer.zero_grad()
         aux_optimizer.zero_grad()
@@ -140,16 +142,21 @@ def train_one_epoch(
         if i % 10 == 0:
             print(
                 f"Train epoch {epoch}: ["
-                f"{i*len(d)}/{len(train_dataloader_raw.dataset)}"
-                f" ({100. * i / len(train_dataloader_raw):.0f}%)]"
+                f"{i*len(d['raw'])}/{len(train_dataloader.dataset)}"
+                f" ({100. * i / len(train_dataloader):.0f}%)]"
                 f'\tLoss: {out_criterion["loss"].item():.3f} |'
                 f'\tMSE loss: {out_criterion["mse_loss"].item():.3f} |'
                 f'\tBpp loss: {out_criterion["bpp_loss"].item():.2f} |'
                 f"\tAux loss: {aux_loss.item():.2f}"
             )
 
+    return {'loss': out_criterion["loss"].item(),
+            'mse': out_criterion["mse_loss"].item(),
+            'bpp': out_criterion["bpp_loss"].item(),
+            'aux': aux_loss.item()}
 
-def test_epoch(epoch, test_dataloader_raw, test_dataloader_srgb, model, criterion):
+
+def test_epoch(epoch, test_dataloader, model, criterion):
     model.eval()
     device = next(model.parameters()).device
 
@@ -159,9 +166,9 @@ def test_epoch(epoch, test_dataloader_raw, test_dataloader_srgb, model, criterio
     aux_loss = AverageMeter()
 
     with torch.no_grad():
-        for d in zip(test_dataloader_raw, test_dataloader_srgb):
-            d_raw = d[0].to(device)
-            d_srgb = d[1].to(device)
+        for d in test_dataloader:
+            d_raw = d['raw'].to(device)
+            d_srgb = d['srgb'].to(device)
 
             out_net = model(d_raw)
             out_criterion = criterion(out_net, d_srgb)
@@ -285,40 +292,21 @@ def main(argv):
         [transforms.CenterCrop(args.patch_size), transforms.ToTensor()]
     )
 
-    train_dataset_raw = ImageFolder(args.dataset_raw, split="train", transform=train_transforms)
-    train_dataset_srgb = ImageFolder(args.dataset_srgb, split="train", transform=train_transforms)
-
-    test_dataset_raw = ImageFolder(args.dataset_raw, split="test", transform=test_transforms)
-    test_dataset_srgb = ImageFolder(args.dataset_srgb, split="test", transform=test_transforms)
+    train_dataset = ImageFolder(args.dataset_raw, args.dataset_srgb, key="train", transform=train_transforms)
+    test_dataset = ImageFolder(args.dataset_raw, args.dataset_srgb, key="test", transform=test_transforms)
 
     device = "cuda" if args.cuda and torch.cuda.is_available() else "cpu"
 
-    train_dataloader_raw = DataLoader(
-        train_dataset_raw,
+    train_dataloader = DataLoader(
+        train_dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        shuffle=False,
+        shuffle=True,
         pin_memory=(device == "cuda"),
     )
 
-    train_dataloader_srgb = DataLoader(
-        train_dataset_srgb,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        shuffle=False,
-        pin_memory=(device == "cuda"),
-    )
-
-    test_dataloader_raw = DataLoader(
-        test_dataset_raw,
-        batch_size=args.test_batch_size,
-        num_workers=args.num_workers,
-        shuffle=False,
-        pin_memory=(device == "cuda"),
-    )
-
-    test_dataloader_srgb = DataLoader(
-        test_dataset_srgb,
+    test_dataloader = DataLoader(
+        test_dataset,
         batch_size=args.test_batch_size,
         num_workers=args.num_workers,
         shuffle=False,
@@ -345,20 +333,38 @@ def main(argv):
         aux_optimizer.load_state_dict(checkpoint["aux_optimizer"])
         lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
 
+    # for drawing loss graph
+    e_loss_g = []
+    loss_g = []
+    mse_loss_g = []
+    bpp_loss_g = []
+    aux_loss_g = []
+
+    eval_loss_g = []
+
     best_loss = float("inf")
     for epoch in range(last_epoch, args.epochs):
         print(f"Learning rate: {optimizer.param_groups[0]['lr']}")
-        train_one_epoch(
+        t = train_one_epoch(
             net,
             criterion,
-            train_dataloader_raw,
-            train_dataloader_srgb,
+            train_dataloader,
             optimizer,
             aux_optimizer,
             epoch,
             args.clip_max_norm,
         )
-        loss = test_epoch(epoch, test_dataloader_raw, test_dataloader_srgb, net, criterion)
+
+        e_loss_g.append(epoch + 1)
+        loss_g.append(t['loss'])
+        mse_loss_g.append(t['mse'])
+        bpp_loss_g.append(t['bpp'])
+        aux_loss_g.append(t['aux'])
+
+        loss = test_epoch(epoch, test_dataloader, net, criterion)
+
+        eval_loss_g.append(loss)
+
         lr_scheduler.step(loss)
 
         is_best = loss < best_loss
@@ -376,6 +382,26 @@ def main(argv):
                 },
                 is_best,
             )
+
+    plt.figure()
+    plt.title('[Loss]')
+    plt.plot(np.array(e_loss_g), np.array(loss_g))
+    plt.savefig('/hdd1/CompressAI-master/outputs/Loss.png')
+    plt.clf()
+
+    plt.title('[MSE loss]')
+    plt.plot(np.array(e_loss_g), np.array(mse_loss_g))
+    plt.savefig('/hdd1/CompressAI-master/outputs/MSE_loss.png')
+    plt.clf()
+
+    plt.title('[Bpp loss]')
+    plt.plot(np.array(e_loss_g), np.array(bpp_loss_g))
+    plt.savefig('/hdd1/CompressAI-master/outputs/Bpp_loss.png')
+    plt.clf()
+
+    plt.title('[Aux loss]')
+    plt.plot(np.array(e_loss_g), np.array(aux_loss_g))
+    plt.savefig('/hdd1/CompressAI-master/outputs/Aux_loss.png')
 
 
 if __name__ == "__main__":

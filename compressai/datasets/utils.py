@@ -16,7 +16,10 @@ from pathlib import Path
 
 from PIL import Image
 from torch.utils.data import Dataset
-
+import rawpy
+import glob
+import numpy as np
+import copy
 
 class ImageFolder(Dataset):
     """Load an image folder database. Training and testing image samples
@@ -39,13 +42,14 @@ class ImageFolder(Dataset):
         split (string): split mode ('train' or 'val')
     """
 
-    def __init__(self, root, transform=None, split="train"):
-        splitdir = Path(root) / split
-
-        if not splitdir.is_dir():
-            raise RuntimeError(f'Invalid directory "{root}"')
-
-        self.samples = [f for f in splitdir.iterdir() if f.is_file()]
+    def __init__(self, root_raw, root_srgb, transform=None, key="train"):
+        if key == "train":
+            self.key = 'train'
+            self.samples_raw = sorted(glob.glob(root_raw + '/train/*.dng'))
+            self.samples_srgb = sorted(glob.glob(root_srgb + '/train/*.png'))
+        else:
+            self.samples_raw = sorted(glob.glob(root_raw + '/test/*.dng'))
+            self.samples_srgb = sorted(glob.glob(root_srgb + '/test/*.png'))
 
         self.transform = transform
 
@@ -57,10 +61,18 @@ class ImageFolder(Dataset):
         Returns:
             img: `PIL.Image.Image` or transformed `PIL.Image.Image`.
         """
-        img = Image.open(self.samples[index]).convert("RGB")
+
+        # raw image 읽어와서 float로 변환 --> 0~255로 normalize
+        img_raw = rawpy.imread(self.samples_raw[index]).raw_image.astype(np.float32) / (2**14-1) * 255
+        img_raw = Image.fromarray(np.clip(np.round(img_raw), 0, 255).astype('uint8'))
+        img_srgb = Image.open(self.samples_srgb[index]).convert("RGB")
+
         if self.transform:
-            return self.transform(img)
-        return img
+            return {'raw': self.transform(copy.deepcopy(img_raw)),
+                    'srgb': self.transform(copy.deepcopy(img_srgb))}
+        return {'raw': img_raw,
+                'srgb': img_srgb}
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.samples_raw)
+

@@ -37,6 +37,9 @@ import compressai
 from compressai.zoo import load_state_dict
 from compressai.zoo import models as pretrained_models
 from compressai.zoo.image import model_architectures as architectures
+import numpy as np
+import rawpy
+import cv2
 
 torch.backends.cudnn.deterministic = True
 torch.set_num_threads(1)
@@ -63,6 +66,13 @@ def collect_images(rootpath: str) -> List[str]:
     ]
 
 
+def collect_images_for_raw(rootpath: str) -> List[str]:
+    return [
+        os.path.join(rootpath, f)
+        for f in os.listdir(rootpath)
+    ]
+
+
 def psnr(a: torch.Tensor, b: torch.Tensor) -> float:
     mse = F.mse_loss(a, b).item()
     return -10 * math.log10(mse)
@@ -74,10 +84,19 @@ def read_image(filepath: str) -> torch.Tensor:
     return transforms.ToTensor()(img)
 
 
-@torch.no_grad()
-def inference(model, x):
-    x = x.unsqueeze(0)
+def read_image_for_raw(filepath: str) -> torch.Tensor:
+    assert os.path.isfile(filepath)
+    img = rawpy.imread(filepath).raw_image.astype(np.float32) / (2 ** 14 - 1) * 255
+    img = Image.fromarray(np.clip(np.round(img), 0, 255).astype('uint8'))
+    return transforms.ToTensor()(img)
 
+
+@torch.no_grad()
+def inference(model, x, y, path):
+    x = x.unsqueeze(0)
+    y = y.unsqueeze(0)
+    print(x.size())
+    print(y.size())
     h, w = x.size(2), x.size(3)
     p = 64  # maximum 6 strides of 2
     new_h = (h + p - 1) // p * p
@@ -104,13 +123,16 @@ def inference(model, x):
     out_dec["x_hat"] = F.pad(
         out_dec["x_hat"], (-padding_left, -padding_right, -padding_top, -padding_bottom)
     )
-
+    print(out_dec["x_hat"].size())
     num_pixels = x.size(0) * x.size(2) * x.size(3)
     bpp = sum(len(s[0]) for s in out_enc["strings"]) * 8.0 / num_pixels
 
+    name = str(os.path.basename(path)).split('.')[0]
+    cv2.imwrite(out_dec["x_hat"], f'/hdd1/CompressAI-master/outputs/{name}_infer.png')
+
     return {
-        "psnr": psnr(x, out_dec["x_hat"]),
-        "ms-ssim": ms_ssim(x, out_dec["x_hat"], data_range=1.0).item(),
+        "psnr": psnr(y, out_dec["x_hat"]),
+        "ms-ssim": ms_ssim(y, out_dec["x_hat"], data_range=1.0).item(),
         "bpp": bpp,
         "encoding_time": enc_time,
         "decoding_time": dec_time,
@@ -118,8 +140,9 @@ def inference(model, x):
 
 
 @torch.no_grad()
-def inference_entropy_estimation(model, x):
+def inference_entropy_estimation(model, x, y, path):
     x = x.unsqueeze(0)
+    y = y.unsqueeze(0)
 
     start = time.time()
     out_net = model.forward(x)
@@ -131,8 +154,11 @@ def inference_entropy_estimation(model, x):
         for likelihoods in out_net["likelihoods"].values()
     )
 
+    name = str(os.path.basename(path)).split('.')[0]
+    cv2.imwrite(out_net["x_hat"], f'/hdd1/CompressAI-master/outputs/{name}_infer_entropy.png')
+
     return {
-        "psnr": psnr(x, out_net["x_hat"]),
+        "psnr": psnr(y, out_net["x_hat"]),
         "bpp": bpp.item(),
         "encoding_time": elapsed_time / 2.0,  # broad estimation
         "decoding_time": elapsed_time / 2.0,
@@ -150,22 +176,24 @@ def load_checkpoint(arch: str, checkpoint_path: str) -> nn.Module:
     return architectures[arch].from_state_dict(state_dict).eval()
 
 
-def eval_model(model, filepaths, entropy_estimation=False, half=False):
+def eval_model(model, filepath_raw, filepath_srgb, entropy_estimation=False, half=False):
     device = next(model.parameters()).device
     metrics = defaultdict(float)
-    for f in filepaths:
-        x = read_image(f).to(device)
+    for f in sorted(zip(filepath_raw, filepath_srgb)):
+        x_raw = read_image_for_raw(f[0]).to(device)
+        x_srgb = read_image(f[1]).to(device)
         if not entropy_estimation:
             if half:
                 model = model.half()
-                x = x.half()
-            rv = inference(model, x)
+                x_raw = x_raw.half()
+                x_srgb = x_srgb.half()
+            rv = inference(model, x_raw, x_srgb, f[0])
         else:
-            rv = inference_entropy_estimation(model, x)
+            rv = inference_entropy_estimation(model, x_raw, x_srgb, f[0])
         for k, v in rv.items():
             metrics[k] += v
     for k, v in metrics.items():
-        metrics[k] = v / len(filepaths)
+        metrics[k] = v / len(filepath_raw)
     return metrics
 
 
@@ -175,7 +203,8 @@ def setup_args():
     )
 
     # Common options.
-    parent_parser.add_argument("dataset", type=str, help="dataset path")
+    parent_parser.add_argument("dataset_raw", type=str, help="raw dataset path")
+    parent_parser.add_argument("dataset_srgb", type=str, help="sRGB dataset path")
     parent_parser.add_argument(
         "-a",
         "--architecture",
@@ -260,8 +289,9 @@ def main(argv):
         parser.print_help()
         sys.exit(1)
 
-    filepaths = collect_images(args.dataset)
-    if len(filepaths) == 0:
+    filepath_raw = collect_images_for_raw(args.dataset_raw)
+    filepath_srgb = collect_images(args.dataset_srgb)
+    if len(filepath_raw) == 0:
         print("Error: no images found in directory.", file=sys.stderr)
         sys.exit(1)
 
@@ -286,7 +316,7 @@ def main(argv):
         model = load_func(*opts, run)
         if args.cuda and torch.cuda.is_available():
             model = model.to("cuda")
-        metrics = eval_model(model, filepaths, args.entropy_estimation, args.half)
+        metrics = eval_model(model, filepath_raw, filepath_srgb, args.entropy_estimation, args.half)
         for k, v in metrics.items():
             results[k].append(v)
 
