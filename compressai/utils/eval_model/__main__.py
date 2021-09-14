@@ -128,7 +128,7 @@ def inference(model, x, y, path):
     bpp = sum(len(s[0]) for s in out_enc["strings"]) * 8.0 / num_pixels
 
     name = str(os.path.basename(path)).split('.')[0]
-    cv2.imwrite(out_dec["x_hat"], f'/hdd1/CompressAI-master/outputs/{name}_infer.png')
+    cv2.imwrite(f'/hdd1/CompressAI-master/outputs/{name}_infer.png', out_dec["x_hat"].numpy())
 
     return {
         "psnr": psnr(y, out_dec["x_hat"]),
@@ -155,7 +155,7 @@ def inference_entropy_estimation(model, x, y, path):
     )
 
     name = str(os.path.basename(path)).split('.')[0]
-    cv2.imwrite(out_net["x_hat"], f'/hdd1/CompressAI-master/outputs/{name}_infer_entropy.png')
+    cv2.imwrite(f'/hdd1/CompressAI-master/outputs/{name}_infer.png', out_net["x_hat"].numpy())
 
     return {
         "psnr": psnr(y, out_net["x_hat"]),

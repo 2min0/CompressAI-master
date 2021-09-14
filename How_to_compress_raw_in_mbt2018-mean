@@ -1,0 +1,38 @@
+CompressAI-master
+'Joint Autoregressive and Hierarchical Priors for Learned Image Compression'
+
+--> architecture name: 'mbt2018-mean'
+
+How to use
+======== training ================================
+python3 examples/train.py -m mbt2018-mean -d_raw "<raw train&eval image path>" -d_srgb "<srgb train&eval image path>" -e <epoch>  --test-batch-size <# of evaluation images> -lr 1e-4 --save --cuda
+
+* <raw image path> means model input and it contains 2 folders:
+ --[train]
+ --[test]
+* <srgb image path> means label and it contains 2 folders:
+ --[train]
+ --[test]
+
+-------- training output -------------------------
+* if you made "outputs" folder before you run 'training file',
+'Loss', 'MSE loss', 'Bpp loss', "Aux loss', and 'Eval loss' graphs are saved in "outputs" folder.
+* get "checkpoint_best_loss.pth.tar" file in root directory.
+
+
+======== model update ============================
+python -m compressai.utils.update_model --architecture 'mbt2018-mean' checkpoint_best_loss.pth.tar
+
+-------- model update output ---------------------
+* substitute "checkpoint_best_loss.pth.tar" file for "checkpoint_best_loss_~~~.pth.tar" file
+
+
+======== testing =================================
+python -m compressai.utils.eval_model checkpoint '<raw test image path>' '<srgb test image path>' -a 'mbt2018-mean' -p '<updated checkpoint .pth.tar file>'
+
+* <raw test image path> contains .dng files directly
+* <srgb test image path> also contains .png files directly
+
+-------- testing output --------------------------
+* get output images of the model whose inputs are raw image for testing.
+

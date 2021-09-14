@@ -402,6 +402,11 @@ def main(argv):
     plt.title('[Aux loss]')
     plt.plot(np.array(e_loss_g), np.array(aux_loss_g))
     plt.savefig('/hdd1/CompressAI-master/outputs/Aux_loss.png')
+    plt.clf()
+
+    plt.title('[Eval loss]')
+    plt.plot(np.array(e_loss_g), np.array(eval_loss_g))
+    plt.savefig('/hdd1/CompressAI-master/outputs/Eval_loss.png')
 
 
 if __name__ == "__main__":
