@@ -202,7 +202,7 @@ class ScaleHyperprior(CompressionModel):
         super().__init__(entropy_bottleneck_channels=N, **kwargs)
 
         self.g_a = nn.Sequential(
-            conv(1, N),
+            conv(4, N),
             GDN(N),
             conv(N, N),
             GDN(N),

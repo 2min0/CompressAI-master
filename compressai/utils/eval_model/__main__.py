@@ -30,7 +30,6 @@ import torch.nn.functional as F
 
 from PIL import Image
 from pytorch_msssim import ms_ssim
-from torchvision import transforms
 
 import compressai
 
@@ -39,7 +38,8 @@ from compressai.zoo import models as pretrained_models
 from compressai.zoo.image import model_architectures as architectures
 import numpy as np
 import rawpy
-import cv2
+import torchvision.transforms as transforms
+
 
 torch.backends.cudnn.deterministic = True
 torch.set_num_threads(1)
@@ -128,7 +128,11 @@ def inference(model, x, y, path):
     bpp = sum(len(s[0]) for s in out_enc["strings"]) * 8.0 / num_pixels
 
     name = str(os.path.basename(path)).split('.')[0]
-    cv2.imwrite(f'/hdd1/CompressAI-master/outputs/{name}_infer.png', out_dec["x_hat"].numpy())
+
+    # delete batch size
+    img = out_dec["x_hat"].cpu().squeeze(dim=0)
+    img = Image.fromarray(img.numpy().transpose(1, 2, 0).astype('uint8'))
+    img.save(f'/hdd1/CompressAI-master/outputs/{name}_infer.png')
 
     return {
         "psnr": psnr(y, out_dec["x_hat"]),
@@ -155,7 +159,6 @@ def inference_entropy_estimation(model, x, y, path):
     )
 
     name = str(os.path.basename(path)).split('.')[0]
-    cv2.imwrite(f'/hdd1/CompressAI-master/outputs/{name}_infer.png', out_net["x_hat"].numpy())
 
     return {
         "psnr": psnr(y, out_net["x_hat"]),

@@ -21,6 +21,7 @@ import glob
 import numpy as np
 import copy
 
+
 class ImageFolder(Dataset):
     """Load an image folder database. Training and testing image samples
     are respectively stored in separate directories:
@@ -63,9 +64,13 @@ class ImageFolder(Dataset):
         """
 
         # raw image 읽어와서 float로 변환 --> 0~255로 normalize
-        img_raw = rawpy.imread(self.samples_raw[index]).raw_image.astype(np.float32) / (2**14-1) * 255
-        img_raw = Image.fromarray(np.clip(np.round(img_raw), 0, 255).astype('uint8'))
-        img_srgb = Image.open(self.samples_srgb[index]).convert("RGB")
+        # img_raw = rawpy.imread(self.samples_raw[index]).raw_image.astype(np.float32) / (2**14-1) * 255
+        # img_raw = Image.fromarray(np.clip(np.round(img_raw), 0, 255).astype('uint8'))
+        # img_srgb = Image.open(self.samples_srgb[index]).convert("RGB")
+
+        # raw image 읽어와서 float 변환 --> 0~1로 normalize
+        img_raw = rawpy.imread(self.samples_raw[index]).raw_image.astype(np.float32) / (2**14-1)
+        img_srgb = np.array(Image.open(self.samples_srgb[index]).convert("RGB")).astype(np.float32) / (2**8-1)
 
         if self.transform:
             return {'raw': self.transform(copy.deepcopy(img_raw)),
